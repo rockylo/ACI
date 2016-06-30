@@ -116,7 +116,21 @@ class Front_Controller extends MY_Controller{
 		}
 
 		$page_data = array_merge($page_data,$this->page_data);
+
 		$this->parser->parse($view_file, $page_data);
+	}
+
+
+	final private function _load_submenu($first_child_arr){
+		if($first_child_arr&&str_exists($first_child_arr['method'],'go_')&& $first_child_arr['is_parent']){
+
+			$arr_childid = explode(",",$first_child_arr['arr_childid']);
+			$first_sub_child_arr = $this->Module_menu_model->get_one("parent_id = ".$arr_childid[1]);
+			if($first_sub_child_arr) return $this->_load_submenu($first_sub_child_arr);
+
+		}
+	
+		return base_url($first_child_arr['folder'].'/'.$first_child_arr['controller'].'/'.$first_child_arr['method']) ;
 	}
 
 
@@ -127,25 +141,15 @@ class Front_Controller extends MY_Controller{
 		$datas = $this->Module_menu_model->select('','*',10000,'list_order ASC,menu_id asc');
 		$array = array();
 		foreach ($datas as $r) {
-			$r['url'] =base_url($r['folder'].'/'.$r['controller'].'/'.$r['method']) ;
-
+			//$r['url'] =base_url($r['folder'].'/'.$r['controller'].'/'.$r['method']) ;
+			$r['url'] = $this->_load_submenu($r);
 			$arr_parentid =  $r['arr_parentid'];
 			$arr_parentid = explode(",",$arr_parentid);
-
-			#缓存的时候自动将第一级要跳转的URL写入到缓存
-			if(count($arr_parentid)==1) {
-				#找到下面第一个子目录
-				$first_child_arr = $this->Module_menu_model->get_one("arr_parentid like '0,".$r['menu_id']."' and is_display = 1","*","list_order asc");
-
-				if($first_child_arr){
-					$first_child_child_arr = $this->Module_menu_model->get_one("arr_parentid like '0,".$r['menu_id'].",".$first_child_arr['menu_id']."' and is_display = 1","*","list_order asc");
-					if($first_child_child_arr){
-						$r['url'] =base_url($first_child_child_arr['folder'].'/'.$first_child_child_arr['controller'].'/'.$first_child_child_arr['method']) ;
-					}
-				}
-			}
+			
 			$menus[$r['menu_id']] = $r;
+			
 		}
+
 		setcache('cache_module_menu_all', $menus);
 
 
@@ -201,13 +205,15 @@ class Member_Controller extends Front_Controller{
 	protected function check_member() {
 
 		$_datainfo = $this->Member_model->get_one(array('user_id'=>$this->user_id,'username'=>$this->user_name));
-		if(!($this->page_data['folder_name']=='member'&&$this->router->class=='manage'&&$this->router->method=='login')&&!$_datainfo)
+		
+		if(!($this->page_data['folder_name']=='member'&&$this->page_data['controller_name']=='manage'&&$this->page_data['method_name']=='login')&&!$_datainfo)
 		{
-			$this->showmessage('请您重新登录',base_url($this->module_info['php_path'].'/manage/login'));
+			$this->showmessage('请您重新登录',site_url('member/manage/login'));
 			exit(0);
+		}else if($_datainfo){
+			
+			$this->current_member_info = $_datainfo;
 		}
-
-		$this->current_member_info = $_datainfo;
 	}
 
 	protected function check_priv()
@@ -404,10 +410,21 @@ class Admin_Controller extends Member_Controller{
 	 */
 	protected function check_member() {
 
-		if(!$this->user_id&&!($this->router->directory=='adminpanel/'&&$this->router->class=='manage'&&$this->router->method=='login'))
+	
+		if(!$this->user_id&&!($this->page_data['folder_name']=='adminpanel'&&$this->page_data['controller_name']=='manage'&&$this->page_data['method_name']=='login'))
 		{
 			$this->showmessage('请您重新登录',site_url('adminpanel/manage/login'));
 			exit(0);
+		}
+
+		$_datainfo = $this->Member_model->get_one(array('user_id'=>$this->user_id,'username'=>$this->user_name));
+		if(!($this->page_data['folder_name']=='adminpanel'&&$this->page_data['controller_name']=='manage'&&$this->page_data['method_name']=='login')&&!$_datainfo)
+		{
+			$this->showmessage('请您重新登录',site_url('adminpanel/manage/login'));
+			exit(0);
+		}else if($_datainfo){
+			
+			$this->current_member_info = $_datainfo;
 		}
 
 	}
@@ -483,6 +500,7 @@ class Admin_Controller extends Member_Controller{
 
 		$find_menu=false;
 		$menu_id = 0;
+		$third_menu_id = 0;//第三个菜单ID
 
 		if($this->current_role_priv_arr)
 		foreach($this->cache_module_menu_arr as $k=>$_value)
@@ -499,6 +517,7 @@ class Admin_Controller extends Member_Controller{
 					$arr_parentid = explode(",",$_value['arr_parentid']);
 					if(count($arr_parentid)>=2) {
 						$parent_id =$arr_parentid[1];
+						$third_menu_id =isset($arr_parentid[3])? $arr_parentid[3]:$menu_id;
 					}else{
 						$parent_id =$_value['menu_id'];
 					}
@@ -517,6 +536,7 @@ class Admin_Controller extends Member_Controller{
 
 		$page_data['menu_data'] = $sub_page_data['menu_data']= $menu_data;
 		$page_data['current_pos']=$this->current_pos($menu_id);
+		$page_data['third_menu_id']=$third_menu_id;
 		$page_data['sub_page']=$this->load->view(reduce_double_slashes($view_file),$sub_page_data,true);
 		$this->load->view('adminpanel/header',$page_data);
 		$this->load->view('adminpanel/index',$page_data);
@@ -553,9 +573,6 @@ class API_Controller extends Front_Controller{
 			exit;
 		}
 
-
-		$headers = apache_request_headers();
-		
 		parent::__construct();
 		$this->load->library(array('encrypt'));
 		define("IN_API", TRUE);
@@ -565,48 +582,29 @@ class API_Controller extends Front_Controller{
 
 	function _check_token(){
 
-		$headers = apache_request_headers();
-		$rawpostdata = file_get_contents("php://input");
-		if(isset($headers['access_token'])){
+		$access_token = "";
+		$headers = array();
 
-			if($rawpostdata)
-				$_POST['token']=$headers['access_token'];
-			else
-				$_GET['token']=$headers['access_token'];
+		foreach ($_SERVER as $key => $value) {
+		    if ('HTTP_' == substr($key, 0, 5)) {
+		        $headers[strtoupper(substr($key, 5))] = $value;
+		    }
 		}
-		if(isset($_GET['token']))
-		{
 
-			$this->GET = $this->POST = $_GET;
+		if(isset($headers['ACCESS_TOKEN'])){
 
-			if($this->GET['token']==""){
-				exit(json_encode(array('status_id'=>-99991,'tips'=>' 登录失败，缺少token')));
-			}
-
-
-		}else{
-
-
-			if(!$rawpostdata)exit(json_encode(array('status_id'=>-99992,'tips'=>' 登录失败，缺少token')));
-
-
-			$post = json_decode($rawpostdata, true);
-			$this->POST  = $post['params'];
-
-			if(!isset($_POST['token'])&&!isset($this->POST['token'])){
-				exit(json_encode(array('status_id'=>-9999,'tips'=>' 登录失败，缺少token')));
-			}
-
-			if(isset($_POST['token'])){
-				$this->POST['token'] = $_POST['token'];
-			}
+			$access_token = trim($headers['ACCESS_TOKEN']);
 		}
-		$token = $this->POST['token'];
 
-		$token =  str_replace("^^","+",$token);
+		if($access_token=="")exit(json_encode(array('status_id'=>-99991,'tips'=>' 登录失败，缺少token')));
+	
+		$token =  str_replace("^^","+",$access_token);
 		$token =  str_replace("~~","#",$token);
+		//xfqJROfIE3lnauI1xvBuWFNcLpeDzMnWMVRvabsy8eBM++bQFUM9r+qLfZd9x0g9bsHW73eU+x7A70dqRmmL71hGTC\/yTCpHQk1prbQOg6sKZGwqMii24gukvxfrRQ4l
+		
 
 		$decode_token = $this->encrypt->decode($token);
+	
 
 		if($decode_token=="")exit(json_encode(array('status_id'=>-9998,'tips'=>' token 无效')));
 		$decode_token_arr = explode("_",$decode_token);
